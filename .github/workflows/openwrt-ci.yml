@@ -1,4 +1,4 @@
-# 
+#
 # <https://github.com/KFERMercer/OpenWrt-CI>
 #
 # Copyright (C) 2019 P3TERX
@@ -8,19 +8,32 @@
 name: OpenWrt-CI
 
 on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - '**.md'
+      - 'LICENSES/**'
   schedule:
     - cron: 0 20 * * *
 
 permissions:
   contents: read
 
+concurrency:
+  group: openwrt-x86-64
+  cancel-in-progress: false
+
 jobs:
 
   build_openwrt:
 
-    name: Build OpenWrt Firmware
+    name: Build x86/64 Firmware
 
     runs-on: ubuntu-22.04
+
+    timeout-minutes: 350
 
     steps:
       - name: Space cleanup and Initialization environment
@@ -58,50 +71,79 @@ jobs:
 
       - name: Update feeds
         run: |
-          sed -i 's/#src-git helloworld/src-git helloworld/g' ./feeds.conf.default
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Generate configuration file
-        run: make defconfig
+      - name: Load x86/64 configuration
+        run: |
+          cp x86_64.config .config
+          make defconfig
+          echo "======================="
+          echo "Target / profile:"
+          echo "======================="
+          grep -E '^CONFIG_TARGET_(BOARD|SUBTARGET|PROFILE|ARCH_PACKAGES)=' .config
+          grep -E '^CONFIG_(GRUB_IMAGES|GRUB_EFI_IMAGES|ISO_IMAGES|TARGET_IMAGES_GZIP)=' .config
+          echo "======================="
+          echo "LuCI:"
+          echo "======================="
+          grep -cE '^CONFIG_PACKAGE_luci' .config || true
+          grep -E '^CONFIG_PACKAGE_luci(-app-ttyd|-i18n-base-zh-cn)?=' .config || true
 
       - name: Download packages
-        run: make download -j16
+        run: make download -j16 || make download -j4
 
       - name: Compile firmware
         run: |
-          make -j$(nproc) || make -j1 V=s
+          make -j$(nproc)
           echo "======================="
           echo "Space usage:"
           echo "======================="
           df -h
-          echo "======================="
           du -h --max-depth=1 ./ --exclude=build_dir --exclude=bin
           du -h --max-depth=1 ./build_dir
           du -h --max-depth=1 ./bin
 
+      - name: Show build errors
+        if: failure()
+        run: |
+          echo "======================="
+          echo "Last package logs:"
+          echo "======================="
+          for f in $(ls -t logs/*.txt 2>/dev/null | head -3); do
+            echo "---- $f ----"
+            tail -60 "$f"
+          done
+          for f in $(find logs -path '*package*' -name '*.txt' 2>/dev/null | tail -3); do
+            echo "---- $f ----"
+            tail -40 "$f"
+          done
+
       - name: Prepare artifact
         run: |
-          mkdir -p ./artifact/package
+          mkdir -p ./artifact/firmware
           mkdir -p ./artifact/buildinfo
           rm -rf $(find ./bin/targets/ -type d -name "packages")
-          cp -rf $(find ./bin/packages/ -type f -name "*.ipk") ./artifact/package/
-          cp -rf $(find ./bin/targets/ -type f -name "*.buildinfo" -o -name "*.manifest") ./artifact/buildinfo/
+          cp -fv ./bin/targets/x86/64/*.img.gz ./artifact/firmware/ || true
+          cp -fv ./bin/targets/x86/64/*.iso ./artifact/firmware/ || true
+          cp -fv ./bin/targets/x86/64/*.vmdk ./artifact/firmware/ || true
+          cp -fv ./bin/targets/x86/64/sha256sums ./artifact/firmware/ || true
+          cp -fv ./bin/targets/x86/64/*.buildinfo ./artifact/buildinfo/ || true
+          cp -fv ./bin/targets/x86/64/*.manifest ./artifact/buildinfo/ || true
+          echo "======================="
+          ls -lh ./artifact/firmware
+          echo "======================="
+          (cd ./artifact/firmware && sha256sum * 2>/dev/null || true)
 
       - name: Upload buildinfo
         uses: actions/upload-artifact@v4
         with:
-          name: OpenWrt_buildinfo
+          name: x86-64-buildinfo
           path: ./artifact/buildinfo/
-
-      - name: Upload package
-        uses: actions/upload-artifact@v4
-        with:
-          name: OpenWrt_package
-          path: ./artifact/package/
+          retention-days: 30
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: OpenWrt_firmware
-          path: ./bin/targets/
+          name: x86-64-firmware
+          path: ./artifact/firmware/
+          retention-days: 30
