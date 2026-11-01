@@ -19,7 +19,8 @@ on:
     - cron: 0 20 * * *
 
 permissions:
-  contents: read
+  # 需要 write 才能在构建成功后创建 / 更新 Release
+  contents: write
 
 concurrency:
   group: openwrt-x86-64
@@ -147,3 +148,38 @@ jobs:
           name: x86-64-firmware
           path: ./artifact/firmware/
           retention-days: 30
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          DATE=$(date -u +%Y%m%d)
+          SHA=$(echo "${GITHUB_SHA}" | cut -c1-7)
+          TAG="x86-64-${DATE}-${SHA}"
+          FILES="./artifact/firmware/*"
+
+          NOTES=$(printf '%b' "Lean's LEDE (R26.05.20) - x86/64 Generic, built by GitHub Actions.\n\nDefault access:\n- LAN 192.168.15.1/25 (netmask 255.255.255.128)\n- Web UI http://192.168.15.1 - user root / password password\n- DHCP pool 192.168.15.20 - 192.168.15.120\n\nFiles:\n- *-combined-efi.img.gz : UEFI boot, write to disk (512 MB raw)\n- *-combined.img.gz : Legacy BIOS boot, write to disk (512 MB raw)\n- *-image-efi.iso / *-image.iso : LiveCD for VM or no-write test\n- *-squashfs-rootfs.img.gz : rootfs only (debug / recovery)\n\nCommit ${SHA}, built ${DATE}.")
+
+          echo "=== dated release: $TAG ==="
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" $FILES --clobber
+          else
+            gh release create "$TAG" $FILES \
+              --title "x86/64 ${DATE} (${SHA})" \
+              --notes "$NOTES" \
+              --latest=false
+          fi
+
+          echo "=== rolling release: x86-64-latest ==="
+          if gh release view x86-64-latest >/dev/null 2>&1; then
+            gh release upload x86-64-latest $FILES --clobber
+            gh release edit x86-64-latest --notes "$NOTES"
+          else
+            gh release create x86-64-latest $FILES \
+              --title "x86/64 latest (rolling)" \
+              --notes "$NOTES"
+          fi
+
+          echo "=== releases ==="
+          gh release list --limit 5
