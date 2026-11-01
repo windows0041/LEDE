@@ -183,3 +183,25 @@ jobs:
 
           echo "=== releases ==="
           gh release list --limit 5
+
+      - name: Prune old releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          KEEP=5
+          # 只清理带日期的历史版本（x86-64-YYYYMMDD-xxxxxxx），滚动版 x86-64-latest 永不删除
+          gh release list --limit 100 --json tagName,createdAt \
+            --jq "[.[] | select(.tagName | test(\"^x86-64-[0-9]{8}-\"))] | sort_by(.createdAt) | reverse | .[$KEEP:] | .[].tagName" \
+            > /tmp/old_releases.txt
+          if [ -s /tmp/old_releases.txt ]; then
+            while read -r tag; do
+              [ -z "$tag" ] && continue
+              echo "pruning $tag"
+              gh release delete "$tag" --yes --cleanup-tag
+            done < /tmp/old_releases.txt
+          else
+            echo "nothing to prune (keeping newest $KEEP dated releases)"
+          fi
+          echo "=== releases after prune ==="
+          gh release list --limit 10
